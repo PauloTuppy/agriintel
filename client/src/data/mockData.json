@@ -1,0 +1,24 @@
+{
+  "market_prices": [
+    { "id": "mp1", "region": "California", "crop": "Almonds", "price": 4.50, "unit": "USD/lb", "demand_index": 85, "date": "2023-10-25" },
+    { "id": "mp2", "region": "California", "crop": "Grapes", "price": 800, "unit": "USD/ton", "demand_index": 70, "date": "2023-10-25" },
+    { "id": "mp3", "region": "Midwest", "crop": "Corn", "price": 4.80, "unit": "USD/bu", "demand_index": 60, "date": "2023-10-25" },
+    { "id": "mp4", "region": "Midwest", "crop": "Soybeans", "price": 13.20, "unit": "USD/bu", "demand_index": 75, "date": "2023-10-25" },
+    { "id": "mp5", "region": "Pacific NW", "crop": "Apples", "price": 0.45, "unit": "USD/lb", "demand_index": 65, "date": "2023-10-25" }
+  ],
+  "crop_rotation": [
+    { "id": "cr1", "soil_type": "Loam", "climate_zone": "9", "previous_crop": "Corn", "next_crop": "Soybeans", "risk_score": 10, "compatibility": "High" },
+    { "id": "cr2", "soil_type": "Loam", "climate_zone": "9", "previous_crop": "Soybeans", "next_crop": "Corn", "risk_score": 10, "compatibility": "High" },
+    { "id": "cr3", "soil_type": "Clay", "climate_zone": "5", "previous_crop": "Wheat", "next_crop": "Canola", "risk_score": 20, "compatibility": "Medium" },
+    { "id": "cr4", "soil_type": "Sandy", "climate_zone": "10", "previous_crop": "Tomato", "next_crop": "Pepper", "risk_score": 90, "compatibility": "Low (Disease Risk)" }
+  ],
+  "logistics": [
+    { "id": "lg1", "origin_region": "California", "destination_market": "New York", "buyer": "Whole Foods", "carrier": "CoolTrans", "cost_per_ton": 150, "transit_days": 4 },
+    { "id": "lg2", "origin_region": "Midwest", "destination_market": "Chicago", "buyer": "ADM", "carrier": "RailFreight", "cost_per_ton": 25, "transit_days": 1 },
+    { "id": "lg3", "origin_region": "Pacific NW", "destination_market": "Los Angeles", "buyer": "Ralphs", "carrier": "WestCoast Trucking", "cost_per_ton": 80, "transit_days": 2 }
+  ],
+  "benchmarks": [
+    { "id": "bm1", "region": "California", "crop_mix": ["Almonds", "Grapes"], "margin": "15%", "yield": "High", "practices": "Drip Irrigation, Cover Crops" },
+    { "id": "bm2", "region": "Midwest", "crop_mix": ["Corn", "Soybeans"], "margin": "8%", "yield": "Medium", "practices": "No-Till, Precision Ag" }
+  ]
+}

@@ -43,39 +43,59 @@
 }
 
 :root {
-  --primary: var(--color-blue-700);
-  --primary-foreground: var(--color-blue-50);
-  --sidebar-primary: var(--color-blue-600);
-  --sidebar-primary-foreground: var(--color-blue-50);
-  --chart-1: var(--color-blue-300);
-  --chart-2: var(--color-blue-500);
-  --chart-3: var(--color-blue-600);
-  --chart-4: var(--color-blue-700);
-  --chart-5: var(--color-blue-800);
-  --radius: 0.65rem;
-  --background: oklch(1 0 0);
-  --foreground: oklch(0.235 0.015 65);
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.235 0.015 65);
+  /* Eco-Brutalism Palette */
+  --color-soil-dark: oklch(0.25 0.02 60); /* Deep Brown/Grey */
+  --color-soil-light: oklch(0.92 0.02 90); /* Unbleached Paper */
+  --color-moss-green: oklch(0.45 0.12 140); /* Moss Green */
+  --color-neon-lime: oklch(0.85 0.25 130); /* High-Vis Lime */
+  --color-safety-orange: oklch(0.65 0.22 40); /* Safety Orange */
+
+  --primary: var(--color-moss-green);
+  --primary-foreground: oklch(0.98 0 0);
+  --sidebar-primary: var(--color-moss-green);
+  --sidebar-primary-foreground: oklch(0.98 0 0);
+  
+  --chart-1: var(--color-moss-green);
+  --chart-2: var(--color-neon-lime);
+  --chart-3: var(--color-safety-orange);
+  --chart-4: oklch(0.35 0.08 140);
+  --chart-5: oklch(0.25 0.05 140);
+
+  --radius: 0px; /* Brutalist: No rounded corners */
+  
+  --background: var(--color-soil-light);
+  --foreground: var(--color-soil-dark);
+  
+  --card: oklch(1 0 0 / 0.8); /* Slight transparency for texture to show */
+  --card-foreground: var(--color-soil-dark);
+  
   --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.235 0.015 65);
-  --secondary: oklch(0.98 0.001 286.375);
-  --secondary-foreground: oklch(0.4 0.015 65);
-  --muted: oklch(0.967 0.001 286.375);
-  --muted-foreground: oklch(0.552 0.016 285.938);
-  --accent: oklch(0.967 0.001 286.375);
-  --accent-foreground: oklch(0.141 0.005 285.823);
-  --destructive: oklch(0.577 0.245 27.325);
-  --destructive-foreground: oklch(0.985 0 0);
-  --border: oklch(0.92 0.004 286.32);
-  --input: oklch(0.92 0.004 286.32);
-  --ring: oklch(0.623 0.214 259.815);
-  --sidebar: oklch(0.985 0 0);
-  --sidebar-foreground: oklch(0.235 0.015 65);
-  --sidebar-accent: oklch(0.967 0.001 286.375);
-  --sidebar-accent-foreground: oklch(0.141 0.005 285.823);
-  --sidebar-border: oklch(0.92 0.004 286.32);
-  --sidebar-ring: oklch(0.623 0.214 259.815);
+  --popover-foreground: var(--color-soil-dark);
+  
+  --secondary: oklch(0.88 0.02 90);
+  --secondary-foreground: var(--color-soil-dark);
+  
+  --muted: oklch(0.85 0.02 90);
+  --muted-foreground: oklch(0.5 0.02 60);
+  
+  --accent: var(--color-neon-lime);
+  --accent-foreground: oklch(0.15 0.02 60);
+  
+  --destructive: var(--color-safety-orange);
+  --destructive-foreground: oklch(0.98 0 0);
+  
+  --border: var(--color-soil-dark); /* High contrast borders */
+  --input: var(--color-soil-dark);
+  --ring: var(--color-neon-lime);
+  
+  --sidebar: oklch(0.95 0.01 90);
+  --sidebar-foreground: var(--color-soil-dark);
+  --sidebar-accent: var(--color-neon-lime);
+  --sidebar-accent-foreground: oklch(0.15 0.02 60);
+  --sidebar-border: var(--color-soil-dark);
+  --sidebar-ring: var(--color-neon-lime);
+
+  font-family: 'Space Grotesk', sans-serif;
 }
 
 .dark {
@@ -119,6 +139,19 @@
   }
   body {
     @apply bg-background text-foreground;
+    font-family: 'Space Grotesk', sans-serif;
+    background-image: url('/images/paper-texture.jpg');
+    background-blend-mode: multiply;
+    background-size: 500px;
+  }
+  h1, h2, h3, h4, h5, h6 {
+    font-family: 'Space Grotesk', sans-serif;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    text-transform: uppercase;
+  }
+  code, pre, .font-mono {
+    font-family: 'Courier Prime', monospace;
   }
   button:not(:disabled),
   [role="button"]:not([aria-disabled="true"]),
