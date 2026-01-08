@@ -1,19 +1,24 @@
 import { useState, useEffect, useRef } from "react";
+import { useAuth } from "@/_core/hooks/useAuth";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Separator } from "@/components/ui/separator";
-import { Send, Sprout, Truck, TrendingUp, AlertTriangle, MapPin, Leaf } from "lucide-react";
+import { Send, Sprout, Truck, TrendingUp, AlertTriangle, RefreshCw, Clock } from "lucide-react";
 import { Streamdown } from 'streamdown';
+import { 
+  searchMarketPrices, 
+  searchCropRotation, 
+  searchLogistics,
+  searchAll,
+  isAlgoliaConfigured,
+  type MarketPriceRecord,
+  type CropRotationRecord,
+  type LogisticsRecord,
+} from "@/lib/algoliaService";
 import mockData from "../data/mockData.json";
 
-// Types for our mock data
-type MarketPrice = { id: string; region: string; crop: string; price: number; unit: string; demand_index: number; date: string };
-type CropRotation = { id: string; soil_type: string; climate_zone: string; previous_crop: string; next_crop: string; risk_score: number; compatibility: string };
-type Logistics = { id: string; origin_region: string; destination_market: string; buyer: string; carrier: string; cost_per_ton: number; transit_days: number };
-type Benchmark = { id: string; region: string; crop_mix: string[]; margin: string; yield: string; practices: string };
-
+// Types for context data
 type Message = {
   role: "user" | "assistant";
   content: string;
@@ -21,24 +26,47 @@ type Message = {
 };
 
 type ContextData = {
-  market?: MarketPrice[];
-  rotation?: CropRotation[];
-  logistics?: Logistics[];
-  benchmark?: Benchmark[];
+  market?: MarketPriceRecord[];
+  rotation?: CropRotationRecord[];
+  logistics?: LogisticsRecord[];
+  lastUpdated?: number | null;
 };
 
+// Format timestamp for display
+function formatLastUpdated(timestamp: number | null | undefined): string {
+  if (!timestamp) return "N/A";
+  const date = new Date(timestamp);
+  const now = new Date();
+  const diffMs = now.getTime() - date.getTime();
+  const diffMins = Math.floor(diffMs / 60000);
+  
+  if (diffMins < 1) return "Just now";
+  if (diffMins < 60) return `${diffMins}m ago`;
+  if (diffMins < 1440) return `${Math.floor(diffMins / 60)}h ago`;
+  return date.toLocaleDateString();
+}
+
 export default function Home() {
+  const { user } = useAuth();
   const [messages, setMessages] = useState<Message[]>([
     {
       role: "assistant",
-      content: "I am **AgriIntel**. \n\nI can help you optimize your farm's profitability using real-time market data, logistics planning, and agronomy rules. \n\n**Try asking:**\n- \"What should I plant in California after corn?\"\n- \"Find buyers for my almonds in the Midwest.\"",
+      content: "I am **AgriIntel**. \n\nI can help you optimize your farm's profitability using real-time market data, logistics planning, and agronomy rules. \n\n**Try asking:**\n- \"What are almond prices in California?\"\n- \"What should I plant after corn?\"\n- \"Find buyers for my crops.\"",
       timestamp: new Date()
     }
   ]);
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [contextData, setContextData] = useState<ContextData>({});
+  const [dataSource, setDataSource] = useState<"algolia" | "mock">("mock");
   const scrollRef = useRef<HTMLDivElement>(null);
+
+  // Check Algolia configuration on mount
+  useEffect(() => {
+    if (isAlgoliaConfigured()) {
+      setDataSource("algolia");
+    }
+  }, []);
 
   // Auto-scroll to bottom of chat
   useEffect(() => {
@@ -47,7 +75,7 @@ export default function Home() {
     }
   }, [messages]);
 
-  // Simulated Agent Logic
+  // Handle send message
   const handleSend = async () => {
     if (!input.trim()) return;
 
@@ -56,72 +84,179 @@ export default function Home() {
     setInput("");
     setIsLoading(true);
 
-    // Simulate network delay and agent "thinking"
-    setTimeout(() => {
-      processAgentResponse(userMessage.content);
-    }, 1500);
+    try {
+      await processAgentResponse(userMessage.content);
+    } catch (error) {
+      console.error("Error processing query:", error);
+      setMessages(prev => [...prev, {
+        role: "assistant",
+        content: "I encountered an error processing your request. Please try again.",
+        timestamp: new Date()
+      }]);
+    } finally {
+      setIsLoading(false);
+    }
   };
 
-  const processAgentResponse = (query: string) => {
+  // Known crop names for keyword extraction
+  const KNOWN_CROPS = [
+    'corn', 'soybeans', 'wheat', 'almonds', 'grapes', 'walnuts', 'lettuce', 'tomatoes',
+    'apples', 'cherries', 'potatoes', 'peaches', 'cotton', 'sorghum', 'canola', 'pepper',
+    'broccoli', 'peanuts', 'tomato'
+  ];
+  const KNOWN_REGIONS = ['california', 'midwest', 'pacific nw', 'southeast', 'texas'];
+
+  // Extract relevant keywords from query for better Algolia search
+  const extractSearchTerms = (query: string): string => {
+    const lowerQuery = query.toLowerCase();
+    const foundCrops = KNOWN_CROPS.filter(crop => lowerQuery.includes(crop));
+    const foundRegions = KNOWN_REGIONS.filter(region => lowerQuery.includes(region));
+    
+    // Return found crops/regions, or fall back to original query
+    const terms = [...foundCrops, ...foundRegions];
+    return terms.length > 0 ? terms.join(' ') : query;
+  };
+
+  // Process query with Algolia or fallback to mock data
+  const processAgentResponse = async (query: string) => {
     const lowerQuery = query.toLowerCase();
     let responseContent = "";
     let newContext: ContextData = { ...contextData };
 
-    // Simple keyword matching to simulate "Command-ify" logic
-    // In a real app, this would be an LLM call parsing intent into commands
+    if (dataSource === "algolia") {
+      // Use Algolia for live data
+      try {
+        // Extract relevant search terms from natural language query
+        const searchTerms = extractSearchTerms(query);
+        console.log('[AgriIntel] Extracted search terms:', searchTerms);
+
+        // Determine query intent and search appropriate indices
+        if (lowerQuery.includes("price") || lowerQuery.includes("market") || lowerQuery.includes("cost") || lowerQuery.includes("almond") || lowerQuery.includes("california")) {
+          console.log('[AgriIntel] Searching market prices for:', searchTerms);
+          const { hits, lastUpdated } = await searchMarketPrices(searchTerms);
+          console.log('[AgriIntel] Market search results:', hits.length, 'hits');
+          if (hits.length > 0) {
+            newContext.market = hits;
+            newContext.lastUpdated = lastUpdated;
+            responseContent += `### Market Overview\n\nBased on **live Algolia data** (updated ${formatLastUpdated(lastUpdated)}):\n\n`;
+            hits.slice(0, 5).forEach(m => {
+              responseContent += `- **${m.crop}** in ${m.region}: **$${m.price} / ${m.unit}** (Demand Index: ${m.demand_index})\n`;
+            });
+          }
+        }
+
+        if (lowerQuery.includes("plant") || lowerQuery.includes("rotation") || lowerQuery.includes("after") || lowerQuery.includes("crop")) {
+          console.log('[AgriIntel] Searching crop rotation for:', searchTerms);
+          const rotationData = await searchCropRotation(searchTerms);
+          console.log('[AgriIntel] Rotation search results:', rotationData.length, 'hits');
+          if (rotationData.length > 0) {
+            newContext.rotation = rotationData;
+            responseContent += `\n### Crop Rotation Recommendations\n\nBased on agronomic data:\n\n`;
+            rotationData.slice(0, 5).forEach(r => {
+              responseContent += `- After **${r.previous_crop}**, plant **${r.next_crop}** — ${r.compatibility} compatibility (Risk: ${r.risk_score}/100)\n`;
+            });
+          }
+        }
+
+        if (lowerQuery.includes("buyer") || lowerQuery.includes("sell") || lowerQuery.includes("logistics") || lowerQuery.includes("ship") || lowerQuery.includes("find")) {
+          console.log('[AgriIntel] Searching logistics for:', searchTerms);
+          const logisticsData = await searchLogistics(searchTerms);
+          console.log('[AgriIntel] Logistics search results:', logisticsData.length, 'hits');
+          if (logisticsData.length > 0) {
+            newContext.logistics = logisticsData;
+            responseContent += `\n### Logistics & Buyers\n\nOptimized routes found:\n\n`;
+            logisticsData.slice(0, 5).forEach(l => {
+              responseContent += `- **${l.buyer}** (${l.destination_market}): Ship via **${l.carrier}** at **$${l.cost_per_ton}/ton** (${l.transit_days} days transit)\n`;
+            });
+          }
+        }
+
+        // If no specific intent matched, do a broad search
+        if (responseContent === "") {
+          console.log('[AgriIntel] No specific intent, doing broad search for:', searchTerms);
+          const allResults = await searchAll(searchTerms);
+          newContext.market = allResults.market;
+          newContext.rotation = allResults.rotation;
+          newContext.logistics = allResults.logistics;
+          newContext.lastUpdated = allResults.lastUpdated;
+
+          if (allResults.market.length > 0) {
+            responseContent += `### Market Data\n\n`;
+            allResults.market.slice(0, 3).forEach(m => {
+              responseContent += `- **${m.crop}** in ${m.region}: **$${m.price}/${m.unit}**\n`;
+            });
+          }
+          if (allResults.rotation.length > 0) {
+            responseContent += `\n### Rotation Rules\n\n`;
+            allResults.rotation.slice(0, 3).forEach(r => {
+              responseContent += `- ${r.previous_crop} → ${r.next_crop} (${r.compatibility})\n`;
+            });
+          }
+          if (allResults.logistics.length > 0) {
+            responseContent += `\n### Logistics Options\n\n`;
+            allResults.logistics.slice(0, 3).forEach(l => {
+              responseContent += `- ${l.buyer}: $${l.cost_per_ton}/ton via ${l.carrier}\n`;
+            });
+          }
+        }
+
+      } catch (error) {
+        console.error("Algolia search error, falling back to mock data:", error);
+        responseContent = processMockData(lowerQuery, newContext);
+      }
+    } else {
+      // Fallback to mock data
+      responseContent = processMockData(lowerQuery, newContext);
+    }
+
+    if (responseContent === "") {
+      responseContent = "I can help you with **Market Prices**, **Crop Rotation**, and **Logistics**. \n\nTry asking: 'What are the almond prices in California?' or 'Who is buying corn in the Midwest?'";
+    } else {
+      responseContent += `\n### Implementation Checklist\n\n- [ ] Verify soil moisture before planting.\n- [ ] Lock in price with buyer if favorable.\n- [ ] Schedule transport 3 days in advance.`;
+    }
+
+    setContextData(newContext);
+    setMessages(prev => [...prev, { role: "assistant", content: responseContent, timestamp: new Date() }]);
+  };
+
+  // Process mock data (fallback)
+  const processMockData = (lowerQuery: string, newContext: ContextData): string => {
+    let responseContent = "";
 
     if (lowerQuery.includes("price") || lowerQuery.includes("market") || lowerQuery.includes("california")) {
-      const marketData = mockData.market_prices.filter(p => lowerQuery.includes(p.region.toLowerCase()) || lowerQuery.includes(p.crop.toLowerCase()));
+      const marketData = mockData.market_prices.filter(p => 
+        lowerQuery.includes(p.region.toLowerCase()) || lowerQuery.includes(p.crop.toLowerCase())
+      );
       if (marketData.length > 0) {
-        newContext.market = marketData;
-        responseContent += `### Market Overview\n\nBased on data from **${marketData[0].date}**, here are the current prices:\n\n`;
+        newContext.market = marketData.map(m => ({ ...m, objectID: m.id, lastUpdated: Date.now() }));
+        responseContent += `### Market Overview (Mock Data)\n\n`;
         marketData.forEach(m => {
           responseContent += `- **${m.crop}** in ${m.region}: **$${m.price} / ${m.unit}** (Demand Index: ${m.demand_index})\n`;
-        });
-      } else {
-        // Fallback if no specific match, show all California data as default example
-        const defaultData = mockData.market_prices.filter(p => p.region === "California");
-        newContext.market = defaultData;
-        responseContent += `### Market Overview\n\nI couldn't find specific data for your exact query, but here is the latest from **California**:\n\n`;
-        defaultData.forEach(m => {
-          responseContent += `- **${m.crop}**: **$${m.price} / ${m.unit}**\n`;
         });
       }
     }
 
     if (lowerQuery.includes("plant") || lowerQuery.includes("rotation") || lowerQuery.includes("after")) {
       const rotationData = mockData.crop_rotation;
-      newContext.rotation = rotationData;
-      responseContent += `\n### Data-Driven Recommendation\n\nConsidering crop rotation rules:\n\n`;
+      newContext.rotation = rotationData.map(r => ({ ...r, objectID: r.id }));
+      responseContent += `\n### Crop Rotation (Mock Data)\n\n`;
       rotationData.forEach(r => {
         if (lowerQuery.includes(r.previous_crop.toLowerCase())) {
-           responseContent += `- After **${r.previous_crop}**, planting **${r.next_crop}** is **${r.compatibility}** compatibility (Risk Score: ${r.risk_score}).\n`;
+          responseContent += `- After **${r.previous_crop}**, plant **${r.next_crop}** — ${r.compatibility} (Risk: ${r.risk_score})\n`;
         }
       });
-      if (!responseContent.includes("After")) {
-         responseContent += `- **General Rule**: Legumes (like Soybeans) fix nitrogen, making them excellent precursors to heavy feeders like Corn.\n`;
-      }
     }
 
     if (lowerQuery.includes("buyer") || lowerQuery.includes("sell") || lowerQuery.includes("logistics")) {
       const logisticsData = mockData.logistics;
-      newContext.logistics = logisticsData;
-      responseContent += `\n### Logistics & Buyers\n\nOptimized routes found:\n\n`;
+      newContext.logistics = logisticsData.map(l => ({ ...l, objectID: l.id }));
+      responseContent += `\n### Logistics (Mock Data)\n\n`;
       logisticsData.forEach(l => {
-         responseContent += `- **${l.buyer}** (${l.destination_market}): Ship via **${l.carrier}** at **$${l.cost_per_ton}/ton** (${l.transit_days} days transit).\n`;
+        responseContent += `- **${l.buyer}** (${l.destination_market}): Ship via **${l.carrier}** at **$${l.cost_per_ton}/ton**\n`;
       });
     }
 
-    if (responseContent === "") {
-      responseContent = "I can help you with **Market Prices**, **Crop Rotation**, and **Logistics**. \n\nTry asking: 'What are the almond prices in California?' or 'Who is buying corn in the Midwest?'";
-    } else {
-      // Add the standard footer
-      responseContent += `\n### Implementation Checklist\n\n- [ ] Verify soil moisture before planting.\n- [ ] Lock in price with buyer if > $${newContext.market?.[0]?.price || 'target'}.\n- [ ] Schedule transport 3 days in advance.`;
-    }
-
-    setContextData(newContext);
-    setMessages(prev => [...prev, { role: "assistant", content: responseContent, timestamp: new Date() }]);
-    setIsLoading(false);
+    return responseContent;
   };
 
   return (
@@ -130,12 +265,18 @@ export default function Home() {
       <div className="w-full md:w-[400px] lg:w-[450px] flex flex-col border-r border-soil-dark bg-soil-light/90 backdrop-blur-sm relative z-10">
         <div className="p-4 border-b border-soil-dark flex items-center gap-3 bg-moss-green text-white">
           <div className="w-10 h-10 bg-white p-1 border border-soil-dark shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]">
-             <img src="/images/agri-logo.png" alt="Logo" className="w-full h-full object-contain" />
+            <img src="/images/agri-logo.png" alt="Logo" className="w-full h-full object-contain" />
           </div>
-          <div>
+          <div className="flex-1">
             <h1 className="text-xl font-bold tracking-tighter uppercase">AgriIntel</h1>
-            <p className="text-xs font-mono opacity-80">v1.0.0 // ONLINE</p>
+            <p className="text-xs font-mono opacity-80">v2.0.0 // {dataSource === "algolia" ? "LIVE DATA" : "OFFLINE"}</p>
           </div>
+          {dataSource === "algolia" && (
+            <div className="flex items-center gap-1 text-xs font-mono bg-white/20 px-2 py-1 rounded">
+              <div className="w-2 h-2 bg-neon-lime rounded-full animate-pulse"></div>
+              ALGOLIA
+            </div>
+          )}
         </div>
 
         <ScrollArea className="flex-1 p-4">
@@ -160,8 +301,9 @@ export default function Home() {
             ))}
             {isLoading && (
               <div className="flex justify-start">
-                <div className="bg-neon-lime text-soil-dark px-3 py-1 text-xs font-mono border border-soil-dark animate-pulse">
-                  PROCESSING_QUERY...
+                <div className="bg-neon-lime text-soil-dark px-3 py-1 text-xs font-mono border border-soil-dark animate-pulse flex items-center gap-2">
+                  <RefreshCw className="w-3 h-3 animate-spin" />
+                  QUERYING_{dataSource.toUpperCase()}...
                 </div>
               </div>
             )}
@@ -201,8 +343,16 @@ export default function Home() {
               <p className="font-mono text-sm text-moss-green mt-1">Supply Chain Intelligence Dashboard</p>
             </div>
             <div className="text-right hidden sm:block">
-              <div className="text-xs font-mono text-soil-dark/60">SYSTEM STATUS</div>
-              <div className="text-lg font-bold text-neon-lime bg-soil-dark px-2 inline-block">OPTIMAL</div>
+              <div className="text-xs font-mono text-soil-dark/60">DATA SOURCE</div>
+              <div className={`text-lg font-bold px-2 inline-block ${dataSource === "algolia" ? "text-neon-lime bg-soil-dark" : "text-safety-orange bg-soil-dark"}`}>
+                {dataSource === "algolia" ? "LIVE" : "MOCK"}
+              </div>
+              {contextData.lastUpdated && (
+                <div className="text-xs font-mono text-soil-dark/60 mt-1 flex items-center justify-end gap-1">
+                  <Clock className="w-3 h-3" />
+                  Updated: {formatLastUpdated(contextData.lastUpdated)}
+                </div>
+              )}
             </div>
           </header>
 
@@ -217,10 +367,10 @@ export default function Home() {
                 </CardTitle>
               </CardHeader>
               <CardContent className="p-4 font-mono text-sm">
-                {contextData.market ? (
+                {contextData.market && contextData.market.length > 0 ? (
                   <div className="space-y-3">
-                    {contextData.market.map((m) => (
-                      <div key={m.id} className="flex justify-between items-center border-b border-dashed border-soil-dark/30 pb-2 last:border-0">
+                    {contextData.market.slice(0, 5).map((m) => (
+                      <div key={m.objectID} className="flex justify-between items-center border-b border-dashed border-soil-dark/30 pb-2 last:border-0">
                         <div>
                           <div className="font-bold">{m.crop}</div>
                           <div className="text-xs opacity-60">{m.region}</div>
@@ -246,13 +396,13 @@ export default function Home() {
                 </CardTitle>
               </CardHeader>
               <CardContent className="p-4 font-mono text-sm">
-                {contextData.rotation ? (
+                {contextData.rotation && contextData.rotation.length > 0 ? (
                   <div className="space-y-3">
-                    {contextData.rotation.map((r) => (
-                      <div key={r.id} className="bg-soil-light p-2 border border-soil-dark">
+                    {contextData.rotation.slice(0, 5).map((r) => (
+                      <div key={r.objectID} className="bg-soil-light p-2 border border-soil-dark">
                         <div className="flex justify-between mb-1">
                           <span className="font-bold">{r.previous_crop} → {r.next_crop}</span>
-                          <span className={`px-1 text-xs ${r.compatibility.includes('High') ? 'bg-neon-lime text-soil-dark' : 'bg-safety-orange text-white'}`}>
+                          <span className={`px-1 text-xs ${r.compatibility.includes('High') ? 'bg-neon-lime text-soil-dark' : r.compatibility.includes('Low') ? 'bg-safety-orange text-white' : 'bg-yellow-400 text-soil-dark'}`}>
                             {r.compatibility}
                           </span>
                         </div>
@@ -274,10 +424,10 @@ export default function Home() {
                 </CardTitle>
               </CardHeader>
               <CardContent className="p-4 font-mono text-sm">
-                {contextData.logistics ? (
+                {contextData.logistics && contextData.logistics.length > 0 ? (
                   <div className="space-y-4">
-                    {contextData.logistics.map((l) => (
-                      <div key={l.id} className="relative pl-4 border-l-2 border-moss-green">
+                    {contextData.logistics.slice(0, 4).map((l) => (
+                      <div key={l.objectID} className="relative pl-4 border-l-2 border-moss-green">
                         <div className="absolute -left-[5px] top-0 w-2 h-2 bg-moss-green rounded-full"></div>
                         <div className="font-bold text-lg">{l.buyer}</div>
                         <div className="text-xs mb-2">{l.origin_region} ➔ {l.destination_market}</div>
@@ -295,25 +445,25 @@ export default function Home() {
               </CardContent>
             </Card>
 
-            {/* Active Alerts / Benchmarks */}
+            {/* Active Alerts / Status */}
             <Card className="bg-soil-dark text-soil-light border border-soil-dark shadow-[6px_6px_0px_0px_rgba(0,0,0,0.5)] rounded-none md:col-span-2 lg:col-span-3">
               <CardHeader className="border-b border-soil-light/20 pb-2">
                 <CardTitle className="flex items-center gap-2 text-lg uppercase text-neon-lime">
-                  <AlertTriangle className="w-5 h-5" /> System Alerts & Benchmarks
+                  <AlertTriangle className="w-5 h-5" /> System Alerts & Status
                 </CardTitle>
               </CardHeader>
               <CardContent className="p-4 font-mono text-sm grid md:grid-cols-3 gap-4">
                 <div className="border border-neon-lime/30 p-3">
-                  <div className="text-xs text-neon-lime mb-1">WEATHER ALERT</div>
-                  <div>Heavy rainfall expected in Midwest region. Delay planting by 48h.</div>
+                  <div className="text-xs text-neon-lime mb-1">DATA SOURCE</div>
+                  <div>{dataSource === "algolia" ? "Connected to Algolia (Live)" : "Using Mock Data (Offline)"}</div>
                 </div>
                 <div className="border border-neon-lime/30 p-3">
-                  <div className="text-xs text-neon-lime mb-1">MARKET OPPORTUNITY</div>
-                  <div>Almond demand in Asia markets up 15% WoW.</div>
+                  <div className="text-xs text-neon-lime mb-1">INDICES ACTIVE</div>
+                  <div>market_prices, crop_rotation, logistics, benchmarks</div>
                 </div>
                 <div className="border border-neon-lime/30 p-3">
-                  <div className="text-xs text-neon-lime mb-1">BENCHMARK ROI</div>
-                  <div>Top 10% farms in CA achieving 18% margin with drip irrigation.</div>
+                  <div className="text-xs text-neon-lime mb-1">LAST SYNC</div>
+                  <div>{formatLastUpdated(contextData.lastUpdated)}</div>
                 </div>
               </CardContent>
             </Card>
