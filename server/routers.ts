@@ -3,12 +3,13 @@ import { getSessionCookieOptions } from "./_core/cookies";
 import { systemRouter } from "./_core/systemRouter";
 import { publicProcedure, protectedProcedure, router } from "./_core/trpc";
 import { z } from "zod";
-import { 
-  isAlgoliaAdminConfigured, 
-  configureIndices, 
+import {
+  isAlgoliaAdminConfigured,
+  configureIndices,
   seedInitialData,
-  indexMarketPrices 
+  indexMarketPrices
 } from "./algoliaAdmin";
+import { runAgentStudio } from "./agentStudio";
 
 export const appRouter = router({
   system: systemRouter,
@@ -38,10 +39,10 @@ export const appRouter = router({
       if (!isAlgoliaAdminConfigured()) {
         throw new Error('Algolia admin not configured. Please set ALGOLIA_APP_ID and ALGOLIA_WRITE_KEY.');
       }
-      
+
       await configureIndices();
       await seedInitialData();
-      
+
       return { success: true, message: 'Algolia indices initialized and seeded.' };
     }),
 
@@ -61,9 +62,29 @@ export const appRouter = router({
         if (!isAlgoliaAdminConfigured()) {
           throw new Error('Algolia admin not configured.');
         }
-        
+
         await indexMarketPrices(input.prices);
         return { success: true, indexed: input.prices.length };
+      }),
+  }),
+
+  // Agent Studio Orchestration
+  agent: router({
+    chat: publicProcedure
+      .input(z.object({
+        message: z.string(),
+      }))
+      .mutation(async ({ input }) => {
+        try {
+          const result = await runAgentStudio(input.message);
+          return {
+            success: true,
+            ...result
+          };
+        } catch (error: any) {
+          console.error('[AgentRouter] Chat error:', error);
+          throw new Error(error.message || 'Failed to process agent query');
+        }
       }),
   }),
 });

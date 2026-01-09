@@ -1,5 +1,6 @@
 import { algoliasearch, SearchClient } from 'algoliasearch';
 import { ENV } from './_core/env';
+import process from 'node:process';
 
 // Algolia Admin Configuration (uses Write API Key)
 const ALGOLIA_APP_ID = process.env.ALGOLIA_APP_ID || '';
@@ -19,6 +20,8 @@ let adminClient: SearchClient | null = null;
 function getAdminClient(): SearchClient {
   if (!adminClient) {
     if (!ALGOLIA_APP_ID || !ALGOLIA_WRITE_KEY) {
+      // In development/demo mode, we don't throw immediately but allow isAlgoliaAdminConfigured to handle it
+      // if someone explicitly calls getAdminClient when not configured, we throw then.
       throw new Error('Algolia admin credentials not configured. Please set ALGOLIA_APP_ID and ALGOLIA_WRITE_KEY.');
     }
     adminClient = algoliasearch(ALGOLIA_APP_ID, ALGOLIA_WRITE_KEY);
@@ -76,7 +79,7 @@ export type BenchmarkRecord = {
 export async function indexMarketPrices(records: Omit<MarketPriceRecord, 'objectID' | 'lastUpdated'>[]): Promise<void> {
   const client = getAdminClient();
   const now = Date.now();
-  
+
   const objectsToIndex = records.map((r, idx) => ({
     ...r,
     objectID: `${r.region}-${r.crop}-${idx}`.toLowerCase().replace(/\s+/g, '-'),
@@ -94,7 +97,7 @@ export async function indexMarketPrices(records: Omit<MarketPriceRecord, 'object
 // Index crop rotation rules
 export async function indexCropRotation(records: Omit<CropRotationRecord, 'objectID'>[]): Promise<void> {
   const client = getAdminClient();
-  
+
   const objectsToIndex = records.map((r, idx) => ({
     ...r,
     objectID: `${r.soil_type}-${r.previous_crop}-${r.next_crop}-${idx}`.toLowerCase().replace(/\s+/g, '-'),
@@ -111,7 +114,7 @@ export async function indexCropRotation(records: Omit<CropRotationRecord, 'objec
 // Index logistics data
 export async function indexLogistics(records: Omit<LogisticsRecord, 'objectID'>[]): Promise<void> {
   const client = getAdminClient();
-  
+
   const objectsToIndex = records.map((r, idx) => ({
     ...r,
     objectID: `${r.origin_region}-${r.buyer}-${idx}`.toLowerCase().replace(/\s+/g, '-'),
@@ -128,7 +131,7 @@ export async function indexLogistics(records: Omit<LogisticsRecord, 'objectID'>[
 // Index benchmarks
 export async function indexBenchmarks(records: Omit<BenchmarkRecord, 'objectID'>[]): Promise<void> {
   const client = getAdminClient();
-  
+
   const objectsToIndex = records.map((r, idx) => ({
     ...r,
     objectID: `${r.region}-${idx}`.toLowerCase().replace(/\s+/g, '-'),
@@ -140,6 +143,118 @@ export async function indexBenchmarks(records: Omit<BenchmarkRecord, 'objectID'>
   });
 
   console.log(`[Algolia] Indexed ${objectsToIndex.length} benchmark records`);
+}
+
+// Search functions for tools
+export async function searchMarketPrices(query: string, crop?: string, region?: string) {
+  if (!isAlgoliaAdminConfigured()) {
+    console.log('[Algolia] Admin not configured, returning mock market prices');
+    const lowerQuery = query.toLowerCase();
+    return MOCK_DATA.marketPrices.filter(p =>
+      p.region.toLowerCase().includes(lowerQuery) ||
+      p.crop.toLowerCase().includes(lowerQuery) ||
+      (crop && p.crop.toLowerCase() === crop.toLowerCase()) ||
+      (region && p.region.toLowerCase() === region.toLowerCase()) ||
+      lowerQuery.includes(p.crop.toLowerCase()) ||
+      lowerQuery.includes(p.region.toLowerCase())
+    ).map((p, idx) => ({ ...p, objectID: `mock-mp-${idx}`, lastUpdated: Date.now() }));
+  }
+
+  const client = getAdminClient();
+  const filters: string[] = [];
+  if (crop) filters.push(`crop:"${crop}"`);
+  if (region) filters.push(`region:"${region}"`);
+
+  const result = await client.searchSingleIndex<MarketPriceRecord>({
+    indexName: INDICES.MARKET_PRICES,
+    searchParams: {
+      query,
+      filters: filters.join(' AND '),
+      hitsPerPage: 10
+    }
+  });
+  return result.hits;
+}
+
+export async function searchCropRotation(query: string, previous_crop?: string) {
+  if (!isAlgoliaAdminConfigured()) {
+    console.log('[Algolia] Admin not configured, returning mock crop rotation');
+    const lowerQuery = query.toLowerCase();
+    return MOCK_DATA.cropRotation.filter(r =>
+      r.previous_crop.toLowerCase().includes(lowerQuery) ||
+      r.next_crop.toLowerCase().includes(lowerQuery) ||
+      (previous_crop && r.previous_crop.toLowerCase() === previous_crop.toLowerCase()) ||
+      lowerQuery.includes(r.previous_crop.toLowerCase())
+    ).map((r, idx) => ({ ...r, objectID: `mock-cr-${idx}` }));
+  }
+
+  const client = getAdminClient();
+  const filters: string[] = [];
+  if (previous_crop) filters.push(`previous_crop:"${previous_crop}"`);
+
+  const result = await client.searchSingleIndex<CropRotationRecord>({
+    indexName: INDICES.CROP_ROTATION,
+    searchParams: {
+      query,
+      filters: filters.join(' AND '),
+      hitsPerPage: 10
+    }
+  });
+  return result.hits;
+}
+
+export async function searchLogistics(query: string, region?: string) {
+  if (!isAlgoliaAdminConfigured()) {
+    console.log('[Algolia] Admin not configured, returning mock logistics');
+    const lowerQuery = query.toLowerCase();
+    return MOCK_DATA.logistics.filter(l =>
+      l.origin_region.toLowerCase().includes(lowerQuery) ||
+      l.destination_market.toLowerCase().includes(lowerQuery) ||
+      l.buyer.toLowerCase().includes(lowerQuery) ||
+      (region && (l.origin_region.toLowerCase() === region.toLowerCase() || l.destination_market.toLowerCase() === region.toLowerCase())) ||
+      lowerQuery.includes(l.origin_region.toLowerCase())
+    ).map((l, idx) => ({ ...l, objectID: `mock-lg-${idx}` }));
+  }
+
+  const client = getAdminClient();
+  const filters: string[] = [];
+  if (region) filters.push(`origin_region:"${region}" OR destination_market:"${region}"`);
+
+  const result = await client.searchSingleIndex<LogisticsRecord>({
+    indexName: INDICES.LOGISTICS,
+    searchParams: {
+      query,
+      filters: filters.join(' AND '),
+      hitsPerPage: 10
+    }
+  });
+  return result.hits;
+}
+
+export async function searchBenchmarks(query: string, region?: string) {
+  if (!isAlgoliaAdminConfigured()) {
+    console.log('[Algolia] Admin not configured, returning mock benchmarks');
+    const lowerQuery = query.toLowerCase();
+    return MOCK_DATA.benchmarks.filter(b =>
+      b.region.toLowerCase().includes(lowerQuery) ||
+      (region && b.region.toLowerCase() === region.toLowerCase()) ||
+      lowerQuery.includes(b.region.toLowerCase())
+    ).map((b, idx) => ({ ...b, objectID: `mock-bm-${idx}` }));
+  }
+
+  const client = getAdminClient();
+  const filters: string[] = [];
+  if (region) filters.push(`region:"${region}"`);
+
+  const result = await client.searchSingleIndex<BenchmarkRecord>({
+    indexName: INDICES.BENCHMARKS,
+    searchParams: {
+      query,
+      filters: filters.join(' AND '),
+      hitsPerPage: 10
+    }
+  });
+  return result.hits;
 }
 
 // Configure index settings (searchable attributes, facets, etc.)
@@ -188,29 +303,26 @@ export async function configureIndices(): Promise<void> {
   console.log('[Algolia] Index settings configured');
 }
 
-// Seed initial data (from mock data)
-export async function seedInitialData(): Promise<void> {
-  // Market Prices - Expanded synthetic data
-  const marketPrices = [
-    { region: "California", crop: "Almonds", price: 4.50, unit: "USD/lb", demand_index: 85, date: new Date().toISOString().split('T')[0] },
-    { region: "California", crop: "Grapes", price: 800, unit: "USD/ton", demand_index: 70, date: new Date().toISOString().split('T')[0] },
-    { region: "California", crop: "Walnuts", price: 3.20, unit: "USD/lb", demand_index: 72, date: new Date().toISOString().split('T')[0] },
-    { region: "California", crop: "Lettuce", price: 22, unit: "USD/crate", demand_index: 65, date: new Date().toISOString().split('T')[0] },
-    { region: "California", crop: "Tomatoes", price: 35, unit: "USD/box", demand_index: 78, date: new Date().toISOString().split('T')[0] },
-    { region: "Midwest", crop: "Corn", price: 4.80, unit: "USD/bu", demand_index: 60, date: new Date().toISOString().split('T')[0] },
-    { region: "Midwest", crop: "Soybeans", price: 13.20, unit: "USD/bu", demand_index: 75, date: new Date().toISOString().split('T')[0] },
-    { region: "Midwest", crop: "Wheat", price: 6.50, unit: "USD/bu", demand_index: 55, date: new Date().toISOString().split('T')[0] },
-    { region: "Pacific NW", crop: "Apples", price: 0.45, unit: "USD/lb", demand_index: 65, date: new Date().toISOString().split('T')[0] },
-    { region: "Pacific NW", crop: "Cherries", price: 3.80, unit: "USD/lb", demand_index: 82, date: new Date().toISOString().split('T')[0] },
-    { region: "Pacific NW", crop: "Potatoes", price: 8.50, unit: "USD/cwt", demand_index: 58, date: new Date().toISOString().split('T')[0] },
-    { region: "Southeast", crop: "Peaches", price: 1.20, unit: "USD/lb", demand_index: 68, date: new Date().toISOString().split('T')[0] },
-    { region: "Southeast", crop: "Cotton", price: 0.85, unit: "USD/lb", demand_index: 52, date: new Date().toISOString().split('T')[0] },
-    { region: "Texas", crop: "Cotton", price: 0.82, unit: "USD/lb", demand_index: 54, date: new Date().toISOString().split('T')[0] },
-    { region: "Texas", crop: "Sorghum", price: 5.20, unit: "USD/bu", demand_index: 48, date: new Date().toISOString().split('T')[0] },
-  ];
-
-  // Crop Rotation rules
-  const cropRotation = [
+// Mock Data for Demo/Development
+export const MOCK_DATA = {
+  marketPrices: [
+    { region: "California", crop: "Almonds", price: 4.50, unit: "USD/lb", demand_index: 85, date: "2024-01-09" },
+    { region: "California", crop: "Grapes", price: 800, unit: "USD/ton", demand_index: 70, date: "2024-01-09" },
+    { region: "California", crop: "Walnuts", price: 3.20, unit: "USD/lb", demand_index: 72, date: "2024-01-09" },
+    { region: "California", crop: "Lettuce", price: 22, unit: "USD/crate", demand_index: 65, date: "2024-01-09" },
+    { region: "California", crop: "Tomatoes", price: 35, unit: "USD/box", demand_index: 78, date: "2024-01-09" },
+    { region: "Midwest", crop: "Corn", price: 4.80, unit: "USD/bu", demand_index: 60, date: "2024-01-09" },
+    { region: "Midwest", crop: "Soybeans", price: 13.20, unit: "USD/bu", demand_index: 75, date: "2024-01-09" },
+    { region: "Midwest", crop: "Wheat", price: 6.50, unit: "USD/bu", demand_index: 55, date: "2024-01-09" },
+    { region: "Pacific NW", crop: "Apples", price: 0.45, unit: "USD/lb", demand_index: 65, date: "2024-01-09" },
+    { region: "Pacific NW", crop: "Cherries", price: 3.80, unit: "USD/lb", demand_index: 82, date: "2024-01-09" },
+    { region: "Pacific NW", crop: "Potatoes", price: 8.50, unit: "USD/cwt", demand_index: 58, date: "2024-01-09" },
+    { region: "Southeast", crop: "Peaches", price: 1.20, unit: "USD/lb", demand_index: 68, date: "2024-01-09" },
+    { region: "Southeast", crop: "Cotton", price: 0.85, unit: "USD/lb", demand_index: 52, date: "2024-01-09" },
+    { region: "Texas", crop: "Cotton", price: 0.82, unit: "USD/lb", demand_index: 54, date: "2024-01-09" },
+    { region: "Texas", crop: "Sorghum", price: 5.20, unit: "USD/bu", demand_index: 48, date: "2024-01-09" },
+  ],
+  cropRotation: [
     { soil_type: "Loam", climate_zone: "9", previous_crop: "Corn", next_crop: "Soybeans", risk_score: 10, compatibility: "High" },
     { soil_type: "Loam", climate_zone: "9", previous_crop: "Soybeans", next_crop: "Corn", risk_score: 10, compatibility: "High" },
     { soil_type: "Loam", climate_zone: "9", previous_crop: "Wheat", next_crop: "Soybeans", risk_score: 15, compatibility: "High" },
@@ -220,10 +332,8 @@ export async function seedInitialData(): Promise<void> {
     { soil_type: "Sandy", climate_zone: "10", previous_crop: "Lettuce", next_crop: "Broccoli", risk_score: 30, compatibility: "Medium" },
     { soil_type: "Loam", climate_zone: "7", previous_crop: "Cotton", next_crop: "Peanuts", risk_score: 20, compatibility: "High" },
     { soil_type: "Loam", climate_zone: "7", previous_crop: "Peanuts", next_crop: "Cotton", risk_score: 15, compatibility: "High" },
-  ];
-
-  // Logistics data
-  const logistics = [
+  ],
+  logistics: [
     { origin_region: "California", destination_market: "New York", buyer: "Whole Foods", carrier: "CoolTrans", cost_per_ton: 150, transit_days: 4 },
     { origin_region: "California", destination_market: "Chicago", buyer: "Costco", carrier: "FreshFreight", cost_per_ton: 120, transit_days: 3 },
     { origin_region: "California", destination_market: "Los Angeles", buyer: "Ralphs", carrier: "LocalHaul", cost_per_ton: 40, transit_days: 1 },
@@ -233,22 +343,23 @@ export async function seedInitialData(): Promise<void> {
     { origin_region: "Pacific NW", destination_market: "Seattle", buyer: "Safeway", carrier: "NW Express", cost_per_ton: 30, transit_days: 1 },
     { origin_region: "Southeast", destination_market: "Atlanta", buyer: "Publix", carrier: "SE Logistics", cost_per_ton: 35, transit_days: 1 },
     { origin_region: "Texas", destination_market: "Houston", buyer: "HEB", carrier: "TX Freight", cost_per_ton: 28, transit_days: 1 },
-  ];
-
-  // Benchmarks
-  const benchmarks = [
+  ],
+  benchmarks: [
     { region: "California", crop_mix: ["Almonds", "Grapes"], margin: "15%", yield: "High", practices: "Drip Irrigation, Cover Crops" },
     { region: "California", crop_mix: ["Tomatoes", "Lettuce"], margin: "12%", yield: "Medium", practices: "Greenhouse, Hydroponics" },
     { region: "Midwest", crop_mix: ["Corn", "Soybeans"], margin: "8%", yield: "Medium", practices: "No-Till, Precision Ag" },
     { region: "Midwest", crop_mix: ["Wheat", "Corn"], margin: "7%", yield: "Medium", practices: "Cover Crops, GPS Guidance" },
     { region: "Pacific NW", crop_mix: ["Apples", "Cherries"], margin: "18%", yield: "High", practices: "Integrated Pest Management" },
     { region: "Southeast", crop_mix: ["Cotton", "Peanuts"], margin: "10%", yield: "Medium", practices: "Crop Rotation, Conservation Tillage" },
-  ];
+  ]
+};
 
-  await indexMarketPrices(marketPrices);
-  await indexCropRotation(cropRotation);
-  await indexLogistics(logistics);
-  await indexBenchmarks(benchmarks);
+// Seed initial data (from mock data)
+export async function seedInitialData(): Promise<void> {
+  await indexMarketPrices(MOCK_DATA.marketPrices);
+  await indexCropRotation(MOCK_DATA.cropRotation);
+  await indexLogistics(MOCK_DATA.logistics);
+  await indexBenchmarks(MOCK_DATA.benchmarks);
 
   console.log('[Algolia] Initial data seeded successfully');
 }

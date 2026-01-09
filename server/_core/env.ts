@@ -1,3 +1,5 @@
+import process from 'node:process';
+
 export const ENV = {
   appId: process.env.VITE_APP_ID ?? "",
   cookieSecret: process.env.JWT_SECRET ?? "",

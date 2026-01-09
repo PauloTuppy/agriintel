@@ -8,6 +8,16 @@ vi.mock('./algoliaAdmin', () => ({
   configureIndices: vi.fn().mockResolvedValue(undefined),
   seedInitialData: vi.fn().mockResolvedValue(undefined),
   indexMarketPrices: vi.fn().mockResolvedValue(undefined),
+  searchMarketPrices: vi.fn().mockResolvedValue([]),
+  searchCropRotation: vi.fn().mockResolvedValue([]),
+  searchLogistics: vi.fn().mockResolvedValue([]),
+  searchBenchmarks: vi.fn().mockResolvedValue([]),
+  INDICES: {
+    MARKET_PRICES: 'market_prices',
+    CROP_ROTATION: 'crop_rotation',
+    LOGISTICS: 'logistics',
+    BENCHMARKS: 'benchmarks',
+  }
 }));
 
 type AuthenticatedUser = NonNullable<TrpcContext["user"]>;

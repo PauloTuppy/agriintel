@@ -6,9 +6,9 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Send, Sprout, Truck, TrendingUp, AlertTriangle, RefreshCw, Clock } from "lucide-react";
 import { Streamdown } from 'streamdown';
-import { 
-  searchMarketPrices, 
-  searchCropRotation, 
+import {
+  searchMarketPrices,
+  searchCropRotation,
   searchLogistics,
   searchAll,
   isAlgoliaConfigured,
@@ -16,6 +16,7 @@ import {
   type CropRotationRecord,
   type LogisticsRecord,
 } from "@/lib/algoliaService";
+import { trpc } from "@/lib/trpc";
 import mockData from "../data/mockData.json";
 
 // Types for context data
@@ -39,7 +40,7 @@ function formatLastUpdated(timestamp: number | null | undefined): string {
   const now = new Date();
   const diffMs = now.getTime() - date.getTime();
   const diffMins = Math.floor(diffMs / 60000);
-  
+
   if (diffMins < 1) return "Just now";
   if (diffMins < 60) return `${diffMins}m ago`;
   if (diffMins < 1440) return `${Math.floor(diffMins / 60)}h ago`;
@@ -58,14 +59,23 @@ export default function Home() {
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [contextData, setContextData] = useState<ContextData>({});
-  const [dataSource, setDataSource] = useState<"algolia" | "mock">("mock");
+  const [dataSource, setDataSource] = useState<"algolia" | "mock">("algolia");
+  const [isInitialized, setIsInitialized] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
+
+  const chatMutation = trpc.agent.chat.useMutation();
 
   // Check Algolia configuration on mount
   useEffect(() => {
+    // We prefer "algolia" source which triggers the backend Agent Studio (or its simulation)
+    // We only fall back to "mock" if we explicitly detect we should, 
+    // but the backend handles simulation more robustly now.
     if (isAlgoliaConfigured()) {
-      setDataSource("algolia");
+      console.log("[AgriIntel] Frontend Algolia credentials detected.");
+    } else {
+      console.log("[AgriIntel] Using backend Agent Studio (with simulation fallback).");
     }
+    setIsInitialized(true);
   }, []);
 
   // Auto-scroll to bottom of chat
@@ -111,7 +121,7 @@ export default function Home() {
     const lowerQuery = query.toLowerCase();
     const foundCrops = KNOWN_CROPS.filter(crop => lowerQuery.includes(crop));
     const foundRegions = KNOWN_REGIONS.filter(region => lowerQuery.includes(region));
-    
+
     // Return found crops/regions, or fall back to original query
     const terms = [...foundCrops, ...foundRegions];
     return terms.length > 0 ? terms.join(' ') : query;
@@ -124,84 +134,24 @@ export default function Home() {
     let newContext: ContextData = { ...contextData };
 
     if (dataSource === "algolia") {
-      // Use Algolia for live data
+      // Use Algolia Agent Studio for orchestration and live data
       try {
-        // Extract relevant search terms from natural language query
-        const searchTerms = extractSearchTerms(query);
-        console.log('[AgriIntel] Extracted search terms:', searchTerms);
+        console.log('[AgriIntel] Orchestrating query via Agent Studio:', query);
 
-        // Determine query intent and search appropriate indices
-        if (lowerQuery.includes("price") || lowerQuery.includes("market") || lowerQuery.includes("cost") || lowerQuery.includes("almond") || lowerQuery.includes("california")) {
-          console.log('[AgriIntel] Searching market prices for:', searchTerms);
-          const { hits, lastUpdated } = await searchMarketPrices(searchTerms);
-          console.log('[AgriIntel] Market search results:', hits.length, 'hits');
-          if (hits.length > 0) {
-            newContext.market = hits;
-            newContext.lastUpdated = lastUpdated;
-            responseContent += `### Market Overview\n\nBased on **live Algolia data** (updated ${formatLastUpdated(lastUpdated)}):\n\n`;
-            hits.slice(0, 5).forEach(m => {
-              responseContent += `- **${m.crop}** in ${m.region}: **$${m.price} / ${m.unit}** (Demand Index: ${m.demand_index})\n`;
-            });
-          }
+        const result = await chatMutation.mutateAsync({ message: query });
+
+        if (result.success) {
+          newContext.market = result.data.market;
+          newContext.rotation = result.data.rotation;
+          newContext.logistics = result.data.logistics;
+          newContext.lastUpdated = Date.now();
+
+          responseContent = result.message;
+        } else {
+          throw new Error('Agent Studio returned failure');
         }
-
-        if (lowerQuery.includes("plant") || lowerQuery.includes("rotation") || lowerQuery.includes("after") || lowerQuery.includes("crop")) {
-          console.log('[AgriIntel] Searching crop rotation for:', searchTerms);
-          const rotationData = await searchCropRotation(searchTerms);
-          console.log('[AgriIntel] Rotation search results:', rotationData.length, 'hits');
-          if (rotationData.length > 0) {
-            newContext.rotation = rotationData;
-            responseContent += `\n### Crop Rotation Recommendations\n\nBased on agronomic data:\n\n`;
-            rotationData.slice(0, 5).forEach(r => {
-              responseContent += `- After **${r.previous_crop}**, plant **${r.next_crop}** — ${r.compatibility} compatibility (Risk: ${r.risk_score}/100)\n`;
-            });
-          }
-        }
-
-        if (lowerQuery.includes("buyer") || lowerQuery.includes("sell") || lowerQuery.includes("logistics") || lowerQuery.includes("ship") || lowerQuery.includes("find")) {
-          console.log('[AgriIntel] Searching logistics for:', searchTerms);
-          const logisticsData = await searchLogistics(searchTerms);
-          console.log('[AgriIntel] Logistics search results:', logisticsData.length, 'hits');
-          if (logisticsData.length > 0) {
-            newContext.logistics = logisticsData;
-            responseContent += `\n### Logistics & Buyers\n\nOptimized routes found:\n\n`;
-            logisticsData.slice(0, 5).forEach(l => {
-              responseContent += `- **${l.buyer}** (${l.destination_market}): Ship via **${l.carrier}** at **$${l.cost_per_ton}/ton** (${l.transit_days} days transit)\n`;
-            });
-          }
-        }
-
-        // If no specific intent matched, do a broad search
-        if (responseContent === "") {
-          console.log('[AgriIntel] No specific intent, doing broad search for:', searchTerms);
-          const allResults = await searchAll(searchTerms);
-          newContext.market = allResults.market;
-          newContext.rotation = allResults.rotation;
-          newContext.logistics = allResults.logistics;
-          newContext.lastUpdated = allResults.lastUpdated;
-
-          if (allResults.market.length > 0) {
-            responseContent += `### Market Data\n\n`;
-            allResults.market.slice(0, 3).forEach(m => {
-              responseContent += `- **${m.crop}** in ${m.region}: **$${m.price}/${m.unit}**\n`;
-            });
-          }
-          if (allResults.rotation.length > 0) {
-            responseContent += `\n### Rotation Rules\n\n`;
-            allResults.rotation.slice(0, 3).forEach(r => {
-              responseContent += `- ${r.previous_crop} → ${r.next_crop} (${r.compatibility})\n`;
-            });
-          }
-          if (allResults.logistics.length > 0) {
-            responseContent += `\n### Logistics Options\n\n`;
-            allResults.logistics.slice(0, 3).forEach(l => {
-              responseContent += `- ${l.buyer}: $${l.cost_per_ton}/ton via ${l.carrier}\n`;
-            });
-          }
-        }
-
       } catch (error) {
-        console.error("Algolia search error, falling back to mock data:", error);
+        console.error("Agent Studio error, falling back to mock data:", error);
         responseContent = processMockData(lowerQuery, newContext);
       }
     } else {
@@ -224,7 +174,7 @@ export default function Home() {
     let responseContent = "";
 
     if (lowerQuery.includes("price") || lowerQuery.includes("market") || lowerQuery.includes("california")) {
-      const marketData = mockData.market_prices.filter(p => 
+      const marketData = mockData.market_prices.filter(p =>
         lowerQuery.includes(p.region.toLowerCase()) || lowerQuery.includes(p.crop.toLowerCase())
       );
       if (marketData.length > 0) {
@@ -269,12 +219,12 @@ export default function Home() {
           </div>
           <div className="flex-1">
             <h1 className="text-xl font-bold tracking-tighter uppercase">AgriIntel</h1>
-            <p className="text-xs font-mono opacity-80">v2.0.0 // {dataSource === "algolia" ? "LIVE DATA" : "OFFLINE"}</p>
+            <p className="text-xs font-mono opacity-80">v2.1.0 // {dataSource === "algolia" ? "AGENT STUDIO" : "OFFLINE"}</p>
           </div>
           {dataSource === "algolia" && (
             <div className="flex items-center gap-1 text-xs font-mono bg-white/20 px-2 py-1 rounded">
               <div className="w-2 h-2 bg-neon-lime rounded-full animate-pulse"></div>
-              ALGOLIA
+              STUDIO
             </div>
           )}
         </div>
@@ -283,15 +233,14 @@ export default function Home() {
           <div className="space-y-6">
             {messages.map((msg, idx) => (
               <div key={idx} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                <div 
-                  className={`max-w-[85%] p-4 border border-soil-dark shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] ${
-                    msg.role === 'user' 
-                      ? 'bg-white text-soil-dark' 
-                      : 'bg-soil-light text-soil-dark'
-                  }`}
+                <div
+                  className={`max-w-[85%] p-4 border border-soil-dark shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] ${msg.role === 'user'
+                    ? 'bg-white text-soil-dark'
+                    : 'bg-soil-light text-soil-dark'
+                    }`}
                 >
                   <div className="text-[10px] font-mono mb-2 opacity-50 uppercase tracking-widest">
-                    {msg.role === 'user' ? 'Operator' : 'System_Agent'} // {msg.timestamp.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
+                    {msg.role === 'user' ? 'Operator' : 'System_Agent'} // {msg.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                   </div>
                   <div className="prose prose-sm max-w-none font-mono leading-relaxed">
                     <Streamdown>{msg.content}</Streamdown>
@@ -313,14 +262,14 @@ export default function Home() {
 
         <div className="p-4 border-t border-soil-dark bg-white">
           <div className="flex gap-2">
-            <Input 
+            <Input
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={(e) => e.key === 'Enter' && handleSend()}
-              placeholder="ENTER COMMAND OR QUERY..." 
+              placeholder="ENTER COMMAND OR QUERY..."
               className="font-mono text-sm border-soil-dark focus-visible:ring-neon-lime rounded-none shadow-[2px_2px_0px_0px_rgba(0,0,0,1)]"
             />
-            <Button 
+            <Button
               onClick={handleSend}
               disabled={isLoading}
               className="bg-soil-dark text-white hover:bg-moss-green rounded-none border border-soil-dark shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] active:translate-y-[2px] active:shadow-none transition-all"
@@ -335,7 +284,7 @@ export default function Home() {
       <div className="flex-1 p-6 overflow-y-auto relative">
         {/* Background Texture Overlay */}
         <div className="absolute inset-0 pointer-events-none opacity-10 bg-[url('/images/soil-texture.jpg')] bg-cover mix-blend-overlay z-0"></div>
-        
+
         <div className="relative z-10 max-w-5xl mx-auto space-y-6">
           <header className="flex justify-between items-end border-b-2 border-soil-dark pb-4 mb-8">
             <div>
@@ -343,9 +292,9 @@ export default function Home() {
               <p className="font-mono text-sm text-moss-green mt-1">Supply Chain Intelligence Dashboard</p>
             </div>
             <div className="text-right hidden sm:block">
-              <div className="text-xs font-mono text-soil-dark/60">DATA SOURCE</div>
+              <div className="text-xs font-mono text-soil-dark/60">ORCHESTRATION</div>
               <div className={`text-lg font-bold px-2 inline-block ${dataSource === "algolia" ? "text-neon-lime bg-soil-dark" : "text-safety-orange bg-soil-dark"}`}>
-                {dataSource === "algolia" ? "LIVE" : "MOCK"}
+                {dataSource === "algolia" ? "AGENT STUDIO" : "MOCK"}
               </div>
               {contextData.lastUpdated && (
                 <div className="text-xs font-mono text-soil-dark/60 mt-1 flex items-center justify-end gap-1">
@@ -358,7 +307,7 @@ export default function Home() {
 
           {/* Masonry / Grid Layout */}
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            
+
             {/* Market Data Card */}
             <Card className="bg-white/80 backdrop-blur border border-soil-dark shadow-[6px_6px_0px_0px_rgba(0,0,0,1)] rounded-none">
               <CardHeader className="border-b border-soil-dark bg-soil-light pb-2">
@@ -454,11 +403,11 @@ export default function Home() {
               </CardHeader>
               <CardContent className="p-4 font-mono text-sm grid md:grid-cols-3 gap-4">
                 <div className="border border-neon-lime/30 p-3">
-                  <div className="text-xs text-neon-lime mb-1">DATA SOURCE</div>
-                  <div>{dataSource === "algolia" ? "Connected to Algolia (Live)" : "Using Mock Data (Offline)"}</div>
+                  <div className="text-xs text-neon-lime mb-1">ORCHESTRATION</div>
+                  <div>{dataSource === "algolia" ? "Algolia Agent Studio (Active)" : "Offline Simulation"}</div>
                 </div>
                 <div className="border border-neon-lime/30 p-3">
-                  <div className="text-xs text-neon-lime mb-1">INDICES ACTIVE</div>
+                  <div className="text-xs text-neon-lime mb-1">TOOLS LINKED</div>
                   <div>market_prices, crop_rotation, logistics, benchmarks</div>
                 </div>
                 <div className="border border-neon-lime/30 p-3">
