@@ -1,5 +1,4 @@
-import algoliasearch, { type SearchClient } from 'algoliasearch';
-import { ENV } from './_core/env';
+import algoliasearch from 'algoliasearch';import { ENV } from './_core/env';
 import process from 'node:process';
 
 // Algolia Admin Configuration (uses Write API Key)
@@ -15,9 +14,9 @@ export const INDICES = {
 } as const;
 
 // Singleton admin client
-let adminClient: SearchClient | null = null;
+let adminClient: any | null = null;
 
-function getAdminClient(): SearchClient {
+function getAdminClient(): any {
   if (!adminClient) {
     if (!ALGOLIA_APP_ID || !ALGOLIA_WRITE_KEY) {
       // In development/demo mode, we don't throw immediately but allow isAlgoliaAdminConfigured to handle it
