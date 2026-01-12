@@ -1,4 +1,4 @@
-import { algoliasearch, SearchClient } from 'algoliasearch';
+import algoliasearch, { type SearchClient } from 'algoliasearch';
 import { ENV } from './_core/env';
 import process from 'node:process';
 
